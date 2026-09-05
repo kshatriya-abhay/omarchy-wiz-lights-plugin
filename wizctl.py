@@ -12,10 +12,13 @@ STATE_DIR = os.path.join(
     "wiz-lights",
 )
 STATE_FILE = os.path.join(STATE_DIR, "lights.json")
+PRESETS_FILE = os.path.join(STATE_DIR, "presets.json")
 
 MAX_LIGHTS = 64
 MAX_STATE_BYTES = 1 << 20
 MAX_FIELD_LEN = 128
+MAX_PRESET_MACS = 64
+MAX_PRESETS_PER_BULB = 12
 
 
 def udp_call(ip, payload, timeout=1.0):
@@ -92,6 +95,182 @@ def save_state(lights):
             fh.write("\n")
         os.chmod(tmp, 0o600)
         os.replace(tmp, STATE_FILE)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+DEFAULT_PRESETS = [
+    {
+        "name": "Warm White",
+        "color": "#FFA757",
+        "mode": "temp",
+        "temp": 2700,
+        "hex": "#FFA757",
+    },
+    {
+        "name": "Daylight",
+        "color": "#FFE4CE",
+        "mode": "temp",
+        "temp": 5000,
+        "hex": "#FFE4CE",
+    },
+    {
+        "name": "Cool White",
+        "color": "#BCD4FF",
+        "mode": "temp",
+        "temp": 6500,
+        "hex": "#BCD4FF",
+    },
+    {
+        "name": "Night Light",
+        "color": "#FF9227",
+        "mode": "temp",
+        "temp": 2200,
+        "hex": "#FF9227",
+    },
+]
+
+
+def clean_preset(preset):
+    if not isinstance(preset, dict):
+        return None
+    mode = preset.get("mode")
+    if mode not in ("temp", "color", "scene"):
+        if "temp" in preset:
+            mode = "temp"
+        elif "r" in preset or "hex" in preset or "color" in preset:
+            mode = "color"
+        elif "sceneId" in preset:
+            mode = "scene"
+        else:
+            return None
+
+    cleaned = {"mode": mode}
+    name = preset.get("name")
+    if isinstance(name, str):
+        cleaned["name"] = name[:MAX_FIELD_LEN]
+
+    color = preset.get("color")
+    if isinstance(color, str) and len(color) <= 32:
+        cleaned["color"] = color
+    hex_val = preset.get("hex")
+    if isinstance(hex_val, str) and len(hex_val) <= 32:
+        cleaned["hex"] = hex_val
+    if "color" not in cleaned and "hex" in cleaned:
+        cleaned["color"] = cleaned["hex"]
+    elif "hex" not in cleaned and "color" in cleaned:
+        cleaned["hex"] = cleaned["color"]
+
+    if mode == "temp":
+        try:
+            temp = int(preset.get("temp", 2700))
+            cleaned["temp"] = max(2200, min(6500, temp))
+        except (ValueError, TypeError):
+            cleaned["temp"] = 2700
+        if "color" not in cleaned:
+            cleaned["color"] = "#FFA757"
+            cleaned["hex"] = "#FFA757"
+    elif mode == "color":
+        for k in ("r", "g", "b"):
+            if k in preset:
+                try:
+                    cleaned[k] = max(0, min(255, int(preset[k])))
+                except (ValueError, TypeError):
+                    pass
+        for k in ("hue", "sat"):
+            if k in preset:
+                try:
+                    cleaned[k] = int(preset[k])
+                except (ValueError, TypeError):
+                    pass
+        if "color" not in cleaned:
+            cleaned["color"] = "#FFFFFF"
+            cleaned["hex"] = "#FFFFFF"
+    elif mode == "scene":
+        try:
+            scene_id = int(preset.get("sceneId", 1))
+            if 1 <= scene_id <= 36 or scene_id == 1000 or 256 <= scene_id <= 265:
+                cleaned["sceneId"] = scene_id
+            else:
+                return None
+        except (ValueError, TypeError):
+            return None
+
+    return cleaned
+
+
+def load_presets():
+    try:
+        fd = os.open(PRESETS_FILE, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return {}
+    try:
+        with os.fdopen(fd, "rb") as fh:
+            raw = fh.read(MAX_STATE_BYTES + 1)
+    except OSError:
+        return {}
+    if len(raw) > MAX_STATE_BYTES:
+        return {}
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    cleaned = {}
+    for mac, plist in list(data.items())[:MAX_PRESET_MACS]:
+        if not isinstance(mac, str) or not mac:
+            continue
+        clean_mac = mac[:MAX_FIELD_LEN]
+        if not isinstance(plist, list):
+            continue
+        cleaned_presets = []
+        for p in plist[:MAX_PRESETS_PER_BULB]:
+            cp = clean_preset(p)
+            if cp is not None:
+                cleaned_presets.append(cp)
+        cleaned[clean_mac] = cleaned_presets
+    return cleaned
+
+
+def get_bulb_presets(all_presets, mac):
+    if not isinstance(all_presets, dict):
+        return [dict(d) for d in DEFAULT_PRESETS]
+    if mac in all_presets:
+        custom = all_presets.get(mac)
+        if isinstance(custom, list):
+            return [
+                clean_preset(p)
+                for p in custom[:MAX_PRESETS_PER_BULB]
+                if clean_preset(p) is not None
+            ]
+        return []
+    return [dict(d) for d in DEFAULT_PRESETS]
+
+
+def save_presets(presets):
+    os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+    cleaned = {}
+    if isinstance(presets, dict):
+        for mac, plist in list(presets.items())[:MAX_PRESET_MACS]:
+            if not isinstance(mac, str) or not isinstance(plist, list):
+                continue
+            cleaned[mac[:MAX_FIELD_LEN]] = [
+                clean_preset(p)
+                for p in plist[:MAX_PRESETS_PER_BULB]
+                if clean_preset(p) is not None
+            ]
+    fd, tmp = tempfile.mkstemp(prefix="presets.", suffix=".tmp", dir=STATE_DIR)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(cleaned, fh, indent=2)
+            fh.write("\n")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, PRESETS_FILE)
     except BaseException:
         try:
             os.unlink(tmp)
@@ -196,11 +375,13 @@ def discover(timeout=1.5, rounds=3):
 
 def status_snapshot(entries):
     bounded = entries[:MAX_LIGHTS]
+    presets = load_presets()
 
     def query(entry):
         result = pilot(entry["ip"])
         out = dict(entry)
         out["reachable"] = bool(result)
+        out["presets"] = get_bulb_presets(presets, entry.get("mac", ""))
         if result:
             rgb = None
             if "r" in result and "g" in result and "b" in result:
@@ -286,6 +467,69 @@ def main(argv):
                 resp["result"].get("success") is True
             )
             emit({"ok": ok, "state": want_on} if ok else {"ok": False, "error": "bulb rejected command"})
+            return 0 if ok else 1
+        except (OSError, ValueError) as exc:
+            emit({"ok": False, "error": str(exc)})
+            return 1
+
+    if cmd == "set-all":
+        if len(argv) < 3 or argv[2] not in ("on", "off"):
+            emit({"ok": False, "error": "usage: set-all <on|off>"})
+            return 1
+        want_on = argv[2] == "on"
+        entries = load_state()
+        if not entries:
+            emit({"ok": True, "state": want_on})
+            return 0
+        def set_one(entry):
+            try:
+                resp = udp_call(
+                    entry["ip"],
+                    {"method": "setPilot", "params": {"state": want_on}},
+                    timeout=1.2,
+                )
+                return isinstance(resp.get("result"), dict) and (
+                    resp["result"].get("success") is True
+                )
+            except (OSError, ValueError):
+                return False
+        with futures.ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(set_one, entries))
+        all_ok = all(results)
+        failed_count = results.count(False)
+        if all_ok:
+            emit({"ok": True, "state": want_on})
+            return 0
+        emit({
+            "ok": False,
+            "state": want_on,
+            "error": f"{failed_count} of {len(results)} bulbs failed to respond",
+            "partial": any(results),
+        })
+        return 1
+
+    if cmd == "scene":
+        if len(argv) < 4:
+            emit({"ok": False, "error": "usage: scene <ip> <sceneId>"})
+            return 1
+        try:
+            scene_id = int(argv[3])
+        except (ValueError, TypeError):
+            emit({"ok": False, "error": "invalid sceneId"})
+            return 1
+        if not (1 <= scene_id <= 36 or scene_id == 1000 or 256 <= scene_id <= 265):
+            emit({"ok": False, "error": f"invalid sceneId: {scene_id} not supported"})
+            return 1
+        try:
+            resp = udp_call(
+                argv[2],
+                {"method": "setPilot", "params": {"sceneId": scene_id}},
+                timeout=1.5,
+            )
+            ok = isinstance(resp.get("result"), dict) and (
+                resp["result"].get("success") is True
+            )
+            emit({"ok": ok, "sceneId": scene_id} if ok else {"ok": False, "error": "bulb rejected command"})
             return 0 if ok else 1
         except (OSError, ValueError) as exc:
             emit({"ok": False, "error": str(exc)})
@@ -390,6 +634,57 @@ def main(argv):
         remaining = [e for e in load_state() if e.get("mac") != argv[2]]
         save_state(remaining)
         emit({"ok": True})
+        return 0
+
+    if cmd == "save-preset":
+        if len(argv) < 4:
+            emit({"ok": False, "error": "usage: save-preset <mac> <json>"})
+            return 1
+        mac = argv[2][:MAX_FIELD_LEN]
+        try:
+            raw_preset = json.loads(argv[3])
+        except (ValueError, TypeError):
+            emit({"ok": False, "error": "invalid json"})
+            return 1
+        new_preset = clean_preset(raw_preset)
+        if not new_preset:
+            emit({"ok": False, "error": "invalid preset object"})
+            return 1
+        all_presets = load_presets()
+        cur = get_bulb_presets(all_presets, mac)
+        cur = [
+            p for p in cur
+            if not (
+                p.get("color") == new_preset.get("color")
+                and p.get("mode") == new_preset.get("mode")
+                and p.get("temp") == new_preset.get("temp")
+            )
+        ]
+        cur = [new_preset] + cur
+        all_presets[mac] = cur[:MAX_PRESETS_PER_BULB]
+        save_presets(all_presets)
+        emit({"ok": True, "presets": all_presets[mac]})
+        return 0
+
+    if cmd == "delete-preset":
+        if len(argv) < 4:
+            emit({"ok": False, "error": "usage: delete-preset <mac> <index>"})
+            return 1
+        mac = argv[2][:MAX_FIELD_LEN]
+        try:
+            idx = int(argv[3])
+        except (ValueError, TypeError):
+            emit({"ok": False, "error": "invalid index"})
+            return 1
+        all_presets = load_presets()
+        if mac not in all_presets:
+            all_presets[mac] = [dict(d) for d in DEFAULT_PRESETS]
+        cur = all_presets[mac]
+        if isinstance(cur, list) and 0 <= idx < len(cur):
+            cur.pop(idx)
+            all_presets[mac] = cur
+            save_presets(all_presets)
+        emit({"ok": True, "presets": all_presets.get(mac, [])})
         return 0
 
     emit({"ok": False, "error": "unknown command: " + cmd})

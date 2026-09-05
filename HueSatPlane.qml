@@ -25,6 +25,7 @@ Item {
   }
 
   function markerLeft() {
+    if (width <= 0) return 0
     var half = markerOuter.width / 2
     var inset = half * 0.65
     var center = Math.max(inset, Math.min(width - inset, (hue / 360) * width))
@@ -32,6 +33,7 @@ Item {
   }
 
   function markerTop() {
+    if (height <= 0) return 0
     var half = markerOuter.height / 2
     var inset = half * 0.65
     var center = Math.max(inset, Math.min(height - inset, sat * height))
@@ -45,55 +47,32 @@ Item {
     sat = fy
   }
 
-  Canvas {
+  // GPU-accelerated 2D color plane (zero CPU Canvas repaints)
+  Rectangle {
     id: plane
     anchors.fill: parent
-    antialiasing: true
+    radius: root.planeRadius
+    clip: true
 
-    Component.onCompleted: requestPaint()
-    onWidthChanged: requestPaint()
-    onHeightChanged: requestPaint()
-
-    onPaint: {
-      var ctx = getContext("2d")
-      ctx.reset()
-      plane.roundedPath(ctx, 0, 0, width, height, root.planeRadius)
-      ctx.save()
-      ctx.clip()
-
-      var rainbow = ctx.createLinearGradient(0, 0, width, 0)
-      rainbow.addColorStop(0.000, "#ff0000")
-      rainbow.addColorStop(0.167, "#ffff00")
-      rainbow.addColorStop(0.333, "#00ff00")
-      rainbow.addColorStop(0.500, "#00ffff")
-      rainbow.addColorStop(0.667, "#0000ff")
-      rainbow.addColorStop(0.833, "#ff00ff")
-      rainbow.addColorStop(1.000, "#ff0000")
-      ctx.fillStyle = rainbow
-      ctx.fillRect(0, 0, width, height)
-
-      var fade = ctx.createLinearGradient(0, 0, 0, height)
-      fade.addColorStop(0, "#ffffffff")
-      fade.addColorStop(1, "#00ffffff")
-      ctx.fillStyle = fade
-      ctx.fillRect(0, 0, width, height)
-
-      ctx.restore()
+    gradient: Gradient {
+      orientation: Gradient.Horizontal
+      GradientStop { position: 0.000; color: "#ff0000" }
+      GradientStop { position: 0.167; color: "#ffff00" }
+      GradientStop { position: 0.333; color: "#00ff00" }
+      GradientStop { position: 0.500; color: "#00ffff" }
+      GradientStop { position: 0.667; color: "#0000ff" }
+      GradientStop { position: 0.833; color: "#ff00ff" }
+      GradientStop { position: 1.000; color: "#ff0000" }
     }
 
-    function roundedPath(ctx, x, y, w, h, r) {
-      r = Math.min(r, w / 2, h / 2)
-      ctx.beginPath()
-      ctx.moveTo(x + r, y)
-      ctx.lineTo(x + w - r, y)
-      ctx.arcTo(x + w, y, x + w, y + r, r)
-      ctx.lineTo(x + w, y + h - r)
-      ctx.arcTo(x + w, y + h, x + w - r, y + h, r)
-      ctx.lineTo(x + r, y + h)
-      ctx.arcTo(x, y + h, x, y + h - r, r)
-      ctx.lineTo(x, y + r)
-      ctx.arcTo(x, y, x + r, y, r)
-      ctx.closePath()
+    Rectangle {
+      anchors.fill: parent
+      radius: root.planeRadius
+      gradient: Gradient {
+        orientation: Gradient.Vertical
+        GradientStop { position: 0.0; color: "#ffffffff" }
+        GradientStop { position: 1.0; color: "#00ffffff" }
+      }
     }
   }
 
@@ -113,8 +92,18 @@ Item {
     color: "transparent"
     border.color: Qt.rgba(0, 0, 0, 0.55)
     border.width: 3
+    visible: root.width > 0 && root.height > 0
     x: root.markerLeft()
     y: root.markerTop()
+
+    Behavior on x {
+      enabled: !area.pressed && root.width > 0
+      NumberAnimation { duration: 60; easing.type: Easing.OutQuad }
+    }
+    Behavior on y {
+      enabled: !area.pressed && root.height > 0
+      NumberAnimation { duration: 60; easing.type: Easing.OutQuad }
+    }
 
     Rectangle {
       id: marker

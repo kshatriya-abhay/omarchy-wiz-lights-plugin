@@ -34,8 +34,17 @@ Item {
     return Math.max(minimum, Math.min(maximum, value))
   }
 
-  function run(args, onDone) {
-    queue.push({ args: args, onDone: onDone })
+  function run(args, onDone, coalesceKey) {
+    if (coalesceKey) {
+      for (var i = queue.length - 1; i >= 0; i--) {
+        if (queue[i].coalesceKey === coalesceKey) {
+          queue[i] = { args: args, onDone: onDone, coalesceKey: coalesceKey }
+          pump()
+          return
+        }
+      }
+    }
+    queue.push({ args: args, onDone: onDone, coalesceKey: coalesceKey || "" })
     pump()
   }
 
@@ -54,18 +63,27 @@ Item {
     run(["set", ip, turnOn ? "on" : "off"], onDone)
   }
 
+  function setAllPower(turnOn, onDone) {
+    run(["set-all", turnOn ? "on" : "off"], onDone)
+  }
+
+  function setScene(ip, sceneId, onDone) {
+    hold(2000)
+    run(["scene", ip, String(sceneId)], onDone)
+  }
+
   function hold(milliseconds) {
     holdUntil = Date.now() + milliseconds
   }
 
-  function setBright(ip, percent, onDone) {
+  function setBright(ip, percent, onDone, coalesceKey) {
     hold(2000)
-    run(["bright", ip, String(Math.round(percent))], onDone)
+    run(["bright", ip, String(Math.round(percent))], onDone, coalesceKey)
   }
 
-  function setTemp(ip, kelvin, onDone) {
+  function setTemp(ip, kelvin, onDone, coalesceKey) {
     hold(2000)
-    run(["temp", ip, String(Math.round(kelvin))], onDone)
+    run(["temp", ip, String(Math.round(kelvin))], onDone, coalesceKey)
   }
 
   function setRgb(ip, r, g, b, onDone) {
@@ -77,9 +95,9 @@ Item {
     run(["color", ip, hex], onDone)
   }
 
-  function setHex(ip, hex, onDone) {
+  function setHex(ip, hex, onDone, coalesceKey) {
     hold(2000)
-    run(["color", ip, String(hex)], onDone)
+    run(["color", ip, String(hex)], onDone, coalesceKey)
   }
 
   function rename(mac, name, onDone) {
@@ -88,6 +106,14 @@ Item {
 
   function forget(mac, onDone) {
     run(["forget", mac], onDone)
+  }
+
+  function savePreset(mac, presetObj, onDone) {
+    run(["save-preset", String(mac), JSON.stringify(presetObj)], onDone)
+  }
+
+  function deletePreset(mac, index, onDone) {
+    run(["delete-preset", String(mac), String(index)], onDone)
   }
 
   function pump() {
@@ -131,12 +157,19 @@ Item {
       root.currentJob = null
       var parsed = Model.parse(root.latestOutput)
       if (parsed.ok) {
-        root.lights = parsed.lights
-        root.lastUpdated = new Date()
-        if (!root.scanning || parsed.lights.length > 0) root.lastError = ""
+        if (Array.isArray(parsed.lights)) {
+          root.lights = parsed.lights
+          root.lastUpdated = new Date()
+        }
+        if (!root.scanning || (parsed.lights && parsed.lights.length > 0)) {
+          root.lastError = ""
+        }
       } else {
         var detail = String(collectorStderr.text || "").replace(/\s+/g, " ").trim()
-        root.lastError = detail ? detail.slice(0, 160) : parsed.error
+        var errMsg = detail ? detail.slice(0, 160) : (parsed && parsed.error ? String(parsed.error) : "")
+        if (errMsg && errMsg !== "undefined") {
+          root.lastError = errMsg
+        }
       }
       if (job && job.onDone) job.onDone(parsed, exitCode)
       pump()

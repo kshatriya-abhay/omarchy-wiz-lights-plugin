@@ -9,17 +9,26 @@ network, for the Omarchy shell (Quickshell).
 
 - UDP broadcast discovery of WiZ bulbs on the LAN (`getSystemConfig` on port 38899)
 - Bar button showing how many bulbs are on (`n/m`)
-- Popup listing every saved bulb with an on/off toggle
-- Per-bulb advanced section (click a bulb row to expand):
-  - Brightness slider (0-100%)
-  - Warm/cool white slider (2200K-6500K)
-  - Color: hue-saturation plane (X = hue, bottom = full saturation, top = white)
-  - Live hex readout of the selected color
-  - White/Warm preset buttons
-  - Rename via the pencil button
-- Active mode indicator: the bulb itself reports whether color or temperature
-  mode is in effect (mutually exclusive); the inactive control dims
+- Popup listing every saved bulb with an on/off toggle and master toggle
+- Direct expanded customization on bulb expansion:
+  - Quick Warm (2700K) and White (6500K) buttons
+  - Custom saved preset dots (save color/temp without overriding brightness; right-click to remove)
+  - Full suite of dynamic WiZ scenes with parity to the official app (Bedtime, Ocean, Romance, Sunset, Party, Fireplace, Cozy, Forest, Candlelight, Pulse, Steampunk, Diwali)
+  - 2D Hue & Saturation color plane matching the WiZ app with live HEX readout
+  - Warm/cool white slider (2200K-6500K) and Brightness slider (0-100%)
+  - Rename bulbs via the pencil button or keyboard shortcut (`N`)
+- Full keyboard navigation with clear focus outlines:
+  - `Up` / `Down` (or `k` / `j`) and `Tab`: navigate between header controls, bulbs, presets, scenes, and sliders
+  - `Left` / `Right` (or `h` / `l`): select swatches, switch between row/switch, or fine-tune sliders
+  - `Enter` / `Space`: toggle switches, open bulbs, apply presets and scenes
+  - `R`: refresh / re-scan local network
+  - `T`: toggle power of focused bulb or master switch
+  - `E` / `O`: expand / collapse focused bulb
+  - `N`: rename focused bulb
+- Clean rotating network scan status phrases without distracting dots
 - Scan button (also `R` inside the panel) to re-discover; IPs update by MAC when DHCP changes them
+- Active preset halos and scene selection highlights
+- Off-state styling with dimmed cards and grayscale preset filter when inactive
 - Slider drags are debounced (~200ms) and pause background polling while in use
 
 ## Requirements
@@ -69,18 +78,20 @@ rm -rf ~/.config/omarchy/plugins/kshatriya-abhay.wiz-lights
 
 ### Cleaning up plugin state
 
-The plugin writes two kinds of state to disk. Neither is removed by the
-commands above, so clean them up explicitly if you want a full uninstall:
+The plugin writes state to disk. Neither is removed by the commands above,
+so clean them up explicitly if you want a full uninstall:
 
 | Path | Contents |
 |------|----------|
-| `~/.local/state/wiz-lights/lights.json` | Saved bulb list: MAC addresses, last-known IPs, and user-assigned names (personal data) |
+| `~/.local/state/wiz-lights/lights.json` | Saved bulb list: MAC addresses, last-known IPs, and user-assigned names |
+| `~/.local/state/wiz-lights/presets.json` | Saved presets per bulb |
 | `~/.cache/quickshell/` | Compiled QML cache; the shell may briefly show the stale widget after removal until this is cleared |
 
 To remove everything:
 
 ```sh
 rm -f ~/.local/state/wiz-lights/lights.json
+rm -f ~/.local/state/wiz-lights/presets.json
 rmdir ~/.local/state/wiz-lights 2>/dev/null || true
 omarchy restart shell
 ```
@@ -104,10 +115,14 @@ Discovered bulbs are persisted by MAC address in
     python3 wizctl.py discover
     python3 wizctl.py status
     python3 wizctl.py set <ip> <on|off>
+    python3 wizctl.py set-all <on|off>
+    python3 wizctl.py scene <ip> <sceneId>
     python3 wizctl.py bright <ip> <0-100>
     python3 wizctl.py temp <ip> <2200-6500>
     python3 wizctl.py rgb <ip> <r> <g> <b>
     python3 wizctl.py color <ip> <#rrggbb>
+    python3 wizctl.py save-preset <mac> '<json>'
+    python3 wizctl.py delete-preset <mac> <index>
     python3 wizctl.py rename <mac> <name>
     python3 wizctl.py forget <mac>
 
